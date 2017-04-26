@@ -21,6 +21,7 @@ import de.heikoseeberger.akkasse._
 import de.heikoseeberger.akkasse.EventStreamMarshalling._
 import sangria.execution.deferred.DeferredResolver
 
+import scala.concurrent.Await
 import scala.concurrent.duration._
 import scala.util.control.NonFatal
 import scala.util.{Failure, Success}
@@ -50,6 +51,15 @@ object Server extends App {
   Source.fromPublisher(eventStorePublisher).collect{case event: AuthorEvent ⇒ event}.to(authorsSink).run()
 
   val executor = Executor(schema.createSchema, deferredResolver = DeferredResolver.fetchers(schema.authors))
+
+  def generateSchema = {
+    import sangria.introspection._
+    val ctx = Ctx(authorsView, articlesView, eventStore, eventStorePublisher, system.dispatcher, timeout)
+
+    val futureOfSchemaJson = Executor.execute(schema.createSchema, introspectionQuery, userContext = ctx)
+
+    Await.ready(futureOfSchemaJson, 5 second).value.get
+  }
 
   def executeQuery(query: String, operation: Option[String], variables: JsObject = JsObject.empty) = {
     val ctx = Ctx(authorsView, articlesView, eventStore, eventStorePublisher, system.dispatcher, timeout)
@@ -125,6 +135,9 @@ object Server extends App {
       parameters('query, 'operation.?) { (query, operation) ⇒
         executeQuery(query, operation)
       }
+    } ~
+    (get & path("schema")) {
+      complete(generateSchema)
     } ~
     (get & path("client")) {
       getFromResource("web/client.html")
